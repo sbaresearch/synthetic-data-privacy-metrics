@@ -41,8 +41,12 @@ def attribute_disclosure_as_classification(real_data,synth_data, quasi_identifie
     
     Returns
     -----------
-    results: pd.DataFrame
-        Dataframe with mean and std values from the predictions obtained for the target value given the combinations of quasi-identifiers.
+    results_acc: pd.DataFrame
+        Dataframe with mean and std accuracy scores from the predictions obtained for the target value given the combinations of quasi-identifiers.
+        
+     results_f1 : pd.DataFrame
+        Dataframe with mean and std f1 scores from the predictions obtained for the target value given the combinations of quasi-identifiers.
+        
     """
     
     key_list = list(itertools.combinations(quasi_identifiers, key_length))
