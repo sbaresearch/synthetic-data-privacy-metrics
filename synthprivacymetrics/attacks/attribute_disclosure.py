@@ -1,22 +1,25 @@
 import itertools
+from typing import Dict, List
 import numpy as np
 import pandas as pd
 from sklearn.compose import ColumnTransformer
 from sklearn.discriminant_analysis import StandardScaler
-from sklearn.dummy import DummyClassifier
+from sklearn.dummy import DummyClassifier, DummyRegressor
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.impute import SimpleImputer
-from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import LinearRegression, LogisticRegression
 from sklearn.naive_bayes import GaussianNB
 from sklearn.neighbors import KNeighborsClassifier
+from sklearn.neural_network import MLPRegressor
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OrdinalEncoder
-from sklearn.svm import SVC
-from sklearn.metrics import accuracy_score, f1_score
-from utils.aux_functions import majority_voting
+from sklearn.svm import SVC, SVR
+from sklearn.metrics import accuracy_score, f1_score, mean_absolute_error, mean_absolute_percentage_error, r2_score
+from utils.aux_functions import majority_voting, average_results
+from pandas.api.types import is_numeric_dtype
 
 
-def attribute_disclosure_as_classification(real_data,synth_data, quasi_identifiers, key_length, target, categorical_columns, preprocessor = None, estimators=None, decimals=3):
+def attribute_disclosure_as_ml_task(real_data,synth_data, quasi_identifiers, key_length, target, categorical_columns, preprocessor = None, decimals=3):
     """
     Produces results for attribute disclosure attacks based on quasi-identifiers key_length, computes all possible combinations and returns the mean and std accuracy of several classifiers. 
     
@@ -36,16 +39,11 @@ def attribute_disclosure_as_classification(real_data,synth_data, quasi_identifie
         List of categorical attributes in the real and synthetic data.
     preprocessor: (ColumnTransformer,optional)
         ColumnTransformer from sklearn with specific steps to preprocess the data. 
-    estimators: (Dict,optional)
-        Dict of classifiers implementing fit and predict method as in Sklearn, keys should be the name of the classifiers.
     
     Returns
     -----------
-    results_acc: pd.DataFrame
-        Dataframe with mean and std accuracy scores from the predictions obtained for the target value given the combinations of quasi-identifiers.
-        
-     results_f1 : pd.DataFrame
-        Dataframe with mean and std f1 scores from the predictions obtained for the target value given the combinations of quasi-identifiers.
+    results: dict
+        Dictionary with a dataframe per each metric with mean and std scores from the predictions obtained for the target value given the combinations of quasi-identifiers.
         
     """
     
@@ -57,23 +55,54 @@ def attribute_disclosure_as_classification(real_data,synth_data, quasi_identifie
         'Synthetic':synth_data
     }
     
-    # Define classifiers used in the task
-    if estimators == None:
+    # Define estimators used to estimate disclosure
+    if target in categorical_columns:
+        
         estimators = {
-            'RF': RandomForestClassifier(),
+            'RF': RandomForestClassifier(random_state=42),
             'SVM': SVC(),
             'NB':  GaussianNB(),
             'KNN': KNeighborsClassifier(),
             'LR':  LogisticRegression()
         }
-    
-    # The dummy classifier is used as reference (Lower Bound)
-    baseline =  DummyClassifier()
+        
+        # The dummy classifier is used as reference (Lower Bound)
+        baseline =  DummyClassifier()
+        
+        metrics = {
+            'acc': accuracy_score,
+            'f1': f1_score
+        }
+        
+        ensemble_function = majority_voting
+        
+    else:
+        if is_numeric_dtype(real_data[target]):
+            estimators = {
+                'LR': LinearRegression(),
+                'SVR': SVR(kernel='rbf'),
+                'MLP': MLPRegressor(solver='adam')    
+            }
+            
+            # The dummy regressor is used as reference (Lower Bound)
+            baseline =  DummyRegressor()
+            
+            metrics = {
+                'mae': mean_absolute_error,
+                'r2': r2_score,
+                'mape': mean_absolute_percentage_error
+            }
+            
+            ensemble_function = average_results
+            
+        else:
+            raise Exception(f'The target variable {target} type is not recognized. Expected types: categorical or numeric.')
+        
     
     # Preprocessing step in case is not defined. 
     if preprocessor == None:
         
-        numerical_columns= [ col for col in real_data.columns if col not in categorical_columns]
+        numerical_columns= [ col for col in real_data.columns if (col not in categorical_columns and col != target)]
         
         # Preprocess numerical columns
         num_transformer = Pipeline(steps=[
@@ -92,16 +121,19 @@ def attribute_disclosure_as_classification(real_data,synth_data, quasi_identifie
             transformers=[
                 ("numerical", num_transformer, numerical_columns),
                 ("categorical", cat_transformer, categorical_columns),
-            ]
+            ],
+            verbose_feature_names_out = False,
+            remainder='passthrough'
         )   
     
-    results_acc = pd.DataFrame(index=data_evaluated.keys())
-    results_f1 = pd.DataFrame(index=data_evaluated.keys())
+    results = {metric_name: pd.DataFrame() for metric_name in metrics.keys()}
+    
             
     for data_name,dataset in data_evaluated.items():
     
-        train_data=pd.DataFrame(preprocessor.fit_transform(dataset),columns=numerical_columns+categorical_columns)
-        test_data=pd.DataFrame(preprocessor.transform(real_data),columns=numerical_columns+categorical_columns)
+        train_data=pd.DataFrame(preprocessor.fit_transform(dataset))
+        train_data.columns= preprocessor.get_feature_names_out() 
+        test_data=pd.DataFrame(preprocessor.transform(real_data),columns=preprocessor.get_feature_names_out()) 
         
         # Keys combinations    
         for i,key in enumerate(key_list):
@@ -112,47 +144,61 @@ def attribute_disclosure_as_classification(real_data,synth_data, quasi_identifie
             y_train = train_data.loc[:,target].values          
             y_test = test_data.loc[:,target].values
             
+            if len(np.unique(y_test)) == 2:
+                average='binary'
+            else:
+                average='macro'
+            
             # Classifiers training 
             y_pred_all = []
             for model_name,model in estimators.items():
                 model.fit(X_train,y_train)
                 y_pred=model.predict(X_test)
                 y_pred_all.append(y_pred)
-                accuracy= accuracy_score(y_test,y_pred)
-                f1_val = f1_score(y_test,y_pred)
-                results_acc.at[data_name,f'key{i}-{model_name}'] = accuracy
-                results_f1.at[data_name,f'key{i}-{model_name}'] = f1_val
+                
+            # Models
+            all_models = list(estimators.keys())
             
             # Ensemble results
-            y_pred=majority_voting(y_pred_all)
-            accuracy= accuracy_score(y_test,y_pred)
-            f1_val= f1_score(y_test,y_pred)
-            results_acc.at[data_name,f'key{i}-ENS'] = accuracy
-            results_f1.at[data_name,f'key{i}-ENS'] = f1_val
-                
+            all_models.append('ENS')
+            y_pred_all.append(ensemble_function(y_pred_all))
+            
+            for model_name,y_pred  in zip(all_models,y_pred_all):    
+                for metric in metrics.keys():
+                    metric_function = metrics[metric]
+                    if metric == 'f1':
+                        score = metric_function(y_test,y_pred,average=average)
+                    else:
+                        score = metric_function(y_test,y_pred)  
+                    results[metric].at[f'{data_name}_{metric}',f'key{i}-{model_name}'] = score
+                 
         # Baseline
         baseline.fit(X_train,y_train)
         y_pred=baseline.predict(X_test)
-        accuracy= accuracy_score(y_test,y_pred)
-        f1_val= f1_score(y_test,y_pred)
-        results_acc.at[data_name,'Dummy']=accuracy
-        results_f1.at[data_name,'Dummy']=f1_val
+        for metric in metrics.keys():
+            metric_function = metrics[metric]
+            if metric == 'f1':
+                score = metric_function(y_test,y_pred,average=average)
+            else:
+                score = metric_function(y_test,y_pred)  
+            results[metric].at[f'{data_name}_{metric}','Dummy'] = round(score,decimals)
+    
         
     # Average results
-    for model_name,model in estimators.items():
-        results_acc[f'{model_name}_mean']=results_acc.filter(regex=model_name).mean(axis=1).round(decimals)
-        results_acc[f'{model_name}_std']=results_acc.filter(regex=model_name).std(axis=1).round(decimals)
-        results_f1[f'{model_name}_mean']=results_f1.filter(regex=model_name).mean(axis=1).round(decimals)
-        results_f1[f'{model_name}_std']=results_f1.filter(regex=model_name).std(axis=1).round(decimals)
-        
-    results_acc[f'ENS_mean']=results_acc.filter(regex='ENS').mean(axis=1).round(decimals)
-    results_acc[f'ENS_std']=results_acc.filter(regex='ENS').std(axis=1).round(decimals)
-    
-    results_f1[f'ENS_mean']=results_f1.filter(regex='ENS').mean(axis=1).round(decimals)
-    results_f1[f'ENS_std']=results_f1.filter(regex='ENS').std(axis=1).round(decimals)
+    for model_name in all_models:
+        for metric in metrics.keys():
+            results[metric][f'{model_name}_mean']=results[metric].filter(regex=model_name).mean(axis=1).round(decimals)
+            results[metric][f'{model_name}_std']=results[metric].filter(regex=model_name).std(axis=1).round(decimals)
+            
+    for metric in metrics.keys():  
+        results[metric]=results[metric][results[metric].columns.drop(list(results[metric].filter(regex='key')))]
+        results[metric][f'ROW_mean']=results[metric].filter(regex='mean').mean(axis=1).round(decimals)
+        results[metric][f'ROW_std']=results[metric].filter(regex='std').std(axis=1).round(decimals)
+            
+    return results
+            
 
-    results_acc=results_acc[results_acc.columns.drop(list(results_acc.filter(regex='key')))]
-    results_f1=results_f1[results_f1.columns.drop(list(results_f1.filter(regex='key')))]
-            
-    return results_acc, results_f1
-            
+    
+    
+    
+    
