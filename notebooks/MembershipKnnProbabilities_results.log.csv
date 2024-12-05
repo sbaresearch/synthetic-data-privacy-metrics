@@ -1,0 +1,5 @@
+dataset_name,risk_score,roc_auc_score,average_precision_score,assessment_type
+adult_dataset,0.5049060945158093,0.5049060945158093,0.6696849239246258,MembershipKnnProbabilities
+adult_dataset,0.5049060945158093,0.5049060945158093,0.6696849239246258,MembershipKnnProbabilities
+adult_dataset,0.5049060945158093,0.5049060945158093,0.6696849239246258,MembershipKnnProbabilities
+adult_dataset,0.5049060945158093,0.5049060945158093,0.6696849239246258,MembershipKnnProbabilities

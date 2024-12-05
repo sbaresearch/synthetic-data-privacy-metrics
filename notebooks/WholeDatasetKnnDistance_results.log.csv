@@ -1,0 +1,5 @@
+dataset_name,risk_score,share,assessment_type
+adult_dataset,0.6833827119261356,0.6833827119261356,WholeDatasetKnnDistance
+adult_dataset,0.6833827119261356,0.6833827119261356,WholeDatasetKnnDistance
+adult_dataset,0.6833827119261356,0.6833827119261356,WholeDatasetKnnDistance
+adult_dataset,0.6833827119261356,0.6833827119261356,WholeDatasetKnnDistance
